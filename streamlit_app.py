@@ -3,121 +3,141 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import os
+import io
 
-# --- 页面配置 ---
-st.set_page_config(page_title="简约记账本", page_icon="💰", layout="wide")
+# --- 1. 配置与税务规则库 (继承自昨天开发的企业版) ---
+st.set_page_config(page_title="全能记账助手", page_icon="📊", layout="wide")
 
-# --- 数据持久化逻辑 ---
-DATA_FILE = "ledger.csv"
+TAX_RULES = {
+    "业务招待费": ["请客", "吃饭", "聚餐", "招待", "宴请", "烟酒", "礼品", "酒店住宿"],
+    "差旅费": ["出差", "机票", "高铁", "火车", "住宿", "打车", "滴滴", "行程"],
+    "办公费": ["纸", "笔", "复印", "耗材", "快递", "顺丰", "ERP", "订阅", "文具", "打印机"],
+    "福利费": ["团建", "下午茶", "节日", "体检", "食堂", "外卖", "月饼"],
+    "职工薪酬": ["工资", "奖金", "绩效", "社保", "公积金", "加班费"],
+    "车辆使用费": ["加油", "停车", "洗车", "车险", "维修", "保养", "油费"],
+    "咨询/劳务费": ["咨询", "法律", "财税", "VAT", "商标", "代理", "申报", "服务费"],
+    "租赁费": ["房租", "租金", "物业", "仓库", "服务器", "AWS"],
+    "广宣费/佣金": ["佣金", "广告", "Facebook", "投流", "网红", "推广", "流量"],
+    "主营业务成本": ["采购", "进货", "货款", "头程", "运费", "物流", "入仓"],
+    "财务费用": ["手续费", "结汇", "提现", "汇兑", "银行", "转账"]
+}
+
+def map_tax_category(row_type, note_text):
+    """智能税务科目映射逻辑"""
+    if row_type == '收入':
+        return "主营业务收入"
+    full_text = str(note_text).lower()
+    for tax_category, keywords in TAX_RULES.items():
+        for keyword in keywords:
+            if keyword.lower() in full_text:
+                return tax_category
+    return "其他支出/待分类"
+
+# --- 2. 数据处理逻辑 ---
+DATA_FILE = "unified_ledger.csv"
 
 def load_data():
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE)
         df['日期'] = pd.to_datetime(df['日期'])
         return df
-    else:
-        return pd.DataFrame(columns=['日期', '类型', '分类', '金额', '备注'])
+    return pd.DataFrame(columns=['日期', '类型', '显示分类', '金额', '备注'])
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-# 初始化数据
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 侧边栏：输入区域 ---
-st.sidebar.header("新增记录")
-with st.sidebar.form("add_record_form", clear_on_submit=True):
-    date = st.date_input("日期", datetime.now())
-    trans_type = st.selectbox("类型", ["支出", "收入"])
+# --- 3. 侧边栏：功能切换与录入 ---
+with st.sidebar:
+    st.title("⚙️ 控制面板")
+    app_mode = st.radio("选择运行模式", ["个人生活模式", "企业报税模式"], help="模式切换会影响分类逻辑和报表展示")
     
-    # 动态分类
-    expense_cats = ["餐饮", "交通", "购物", "娱乐", "居住", "医疗", "其他"]
-    income_cats = ["工资", "理财", "兼职", "奖金", "其他"]
-    category = st.selectbox("分类", expense_cats if trans_type == "支出" else income_cats)
-    
-    amount = st.number_input("金额", min_value=0.0, step=0.1, format="%.2f")
-    note = st.text_input("备注")
-    
-    submit = st.form_submit_button("保存记录")
+    st.markdown("---")
+    st.subheader("📝 新增记录")
+    with st.form("input_form", clear_on_submit=True):
+        date = st.date_input("日期", datetime.now())
+        trans_type = st.selectbox("类型", ["支出", "收入"])
+        
+        if app_mode == "个人生活模式":
+            # 个人模式下手动选择生活分类
+            cats = ["餐饮", "交通", "购物", "娱乐", "居住", "医疗", "其他"] if trans_type == "支出" else ["工资", "理财", "兼职", "其他"]
+            display_cat = st.selectbox("生活分类", cats)
+        else:
+            # 企业模式下引导输入详细说明，由系统自动映射
+            st.info("💡 系统将根据你的【备注】自动识别税务科目")
+            display_cat = "系统自动识别"
+            
+        amount = st.number_input("金额", min_value=0.0, step=1.0)
+        note = st.text_input("说明/备注 (如：请客户吃饭、发工资、买打印纸)")
+        
+        if st.form_submit_button("确认入账"):
+            new_row = {
+                '日期': pd.to_datetime(date),
+                '类型': trans_type,
+                '显示分类': display_cat,
+                '金额': amount,
+                '备注': note
+            }
+            st.session_state.data = pd.concat([st.session_state.data, pd.DataFrame([new_row])], ignore_index=True)
+            save_data(st.session_state.data)
+            st.success("入账成功！")
 
-if submit:
-    new_record = {
-        '日期': pd.to_datetime(date),
-        '类型': trans_type,
-        '分类': category,
-        '金额': amount,
-        '备注': note
-    }
-    st.session_state.data = pd.concat([st.session_state.data, pd.DataFrame([new_record])], ignore_index=True)
-    save_data(st.session_state.data)
-    st.sidebar.success("记录已保存！")
-
-# --- 主界面 ---
-st.title("💰 我的个人财务看板")
-
-# 数据处理
+# --- 4. 主界面展示 ---
+st.title(f"💰 {app_mode}")
 df = st.session_state.data
 
 if not df.empty:
-    # 顶部指标
-    total_income = df[df['类型'] == '收入']['金额'].sum()
-    total_expense = df[df['类型'] == '支出']['金额'].sum()
-    balance = total_income - total_expense
-
+    # 指标统计
     col1, col2, col3 = st.columns(3)
-    col1.metric("总收入", f"¥{total_income:,.2f}", delta_color="normal")
-    col2.metric("总支出", f"¥{total_expense:,.2f}", delta_color="inverse")
-    col3.metric("当前余额", f"¥{balance:,.2f}")
+    income = df[df['类型'] == '收入']['金额'].sum()
+    expense = df[df['类型'] == '支出']['金额'].sum()
+    col1.metric("累计收入", f"¥{income:,.2f}")
+    col2.metric("累计支出", f"¥{expense:,.2f}")
+    col3.metric("当前结余", f"¥{income - expense:,.2f}")
 
-    st.markdown("---")
-
-    # 图表分析展示区
-    tab1, tab2, tab3 = st.tabs(["收支趋势", "支出分布", "明细数据"])
-
-    with tab1:
-        st.subheader("每日收支趋势")
-        # 按日期汇总
-        trend_df = df.groupby(['日期', '类型'])['金额'].sum().reset_index()
-        fig_trend = px.line(trend_df, x='日期', y='金额', color='类型',
-                           line_shape="spline", markers=True,
-                           color_discrete_map={"收入": "#2ecc71", "支出": "#e74c3c"})
-        st.plotly_chart(fig_trend, use_container_width=True)
-
-    with tab2:
-        st.subheader("支出构成分析")
-        expense_df = df[df['类型'] == '支出']
+    # 核心：根据模式展示不同的视图
+    if app_mode == "企业报税模式":
+        st.subheader("📑 企业税务科目明细 (AI 自动分类)")
+        view_df = df.copy()
+        # 应用昨天的智能映射逻辑
+        view_df['税务科目'] = view_df.apply(lambda x: map_tax_category(x['类型'], x['备注']), axis=1)
+        # 重新排序列，让税务科目更显眼
+        display_cols = ['日期', '税务科目', '类型', '金额', '备注']
+        st.dataframe(view_df[display_cols].sort_values(by='日期', ascending=False), use_container_width=True)
+        
+        # 企业模式特有的饼图：按税务科目分布
+        st.subheader("📊 税务支出构成")
+        expense_df = view_df[view_df['类型'] == '支出']
+        fig = px.pie(expense_df, values='金额', names='税务科目', hole=0.4)
+        st.plotly_chart(fig, use_container_width=True)
+        
+    else:
+        st.subheader("📅 个人生活账单明细")
+        st.dataframe(df.sort_values(by='日期', ascending=False), use_container_width=True)
+        
+        # 个人模式图表：按生活分类
+        st.subheader("📊 生活消费支出分布")
+        expense_df = df[(df['类型'] == '支出') & (df['显示分类'] != '系统自动识别')]
         if not expense_df.empty:
-            fig_pie = px.pie(expense_df, values='金额', names='分类', 
-                            hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        else:
-            st.info("暂无支出数据可分析")
+            fig = px.pie(expense_df, values='金额', names='显示分类', hole=0.4)
+            st.plotly_chart(fig, use_container_width=True)
 
-    with tab3:
-        st.subheader("历史明细")
-        # 提供删除功能
-        edited_df = st.data_editor(
-            df.sort_values(by='日期', ascending=False),
-            use_container_width=True,
-            num_rows="dynamic"
-        )
-        if st.button("更新修改"):
-            st.session_state.data = edited_df
-            save_data(edited_df)
-            st.rerun()
+    # 导出功能
+    st.markdown("---")
+    if app_mode == "企业报税模式":
+        # 导出带税务科目的 Excel/CSV
+        export_df = df.copy()
+        export_df['税务科目'] = export_df.apply(lambda x: map_tax_category(x['类型'], x['备注']), axis=1)
+        csv = export_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 导出企业纳税参考报表 (CSV)", csv, "company_tax_report.csv", "text/csv")
+    else:
+        csv = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 导出个人年度对账单 (CSV)", csv, "personal_ledger.csv", "text/csv")
 
-    # 导出 CSV 按钮
-    csv = df.to_csv(index=False).encode('utf-8-sig')
-    st.download_button(
-        label="导出数据为 CSV",
-        data=csv,
-        file_name=f'ledger_{datetime.now().strftime("%Y%m%d")}.csv',
-        mime='text/csv',
-    )
 else:
-    st.info("欢迎使用记账工具！请在左侧侧边栏添加你的第一笔记录。")
+    st.info("暂无数据，请在侧边栏开始记账。")
 
-# --- 底部 ---
-st.markdown("---")
-st.caption("由 Streamlit 驱动 | 数据存储于本地 ledger.csv")
+# --- 5. 底部版权 ---
+st.caption("全能记账助手 | 模式：智能税务映射 + 个人生活分类")
