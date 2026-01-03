@@ -5,16 +5,26 @@ from datetime import datetime
 import os
 
 # --- 1. 配置与税务规则库 ---
-st.set_page_config(page_title="全能记账助手 Pro", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="小微企业智能记账报税助手", page_icon="🏦", layout="wide")
 
-# 标准税务科目列表
-TAX_CATEGORIES = [
-    "业务招待费", "差旅费", "办公费", "福利费", "职工薪酬", 
-    "车辆使用费", "咨询/劳务费", "租赁费", "广宣费/佣金", 
-    "主营业务成本", "财务费用", "其他支出/待分类"
-]
+# 标准会计科目与报表行项映射 (基于《小企业会计准则》)
+# 我们将细分科目归集到利润表的三大费用中
+FINANCIAL_REPORT_MAPPING = {
+    "主营业务收入": "一、营业收入",
+    "主营业务成本": "二、营业成本",
+    "广宣费/佣金": "销售费用",
+    "业务招待费": "管理费用",
+    "差旅费": "管理费用",
+    "办公费": "管理费用",
+    "福利费": "管理费用",
+    "职工薪酬": "管理费用",
+    "车辆使用费": "管理费用",
+    "咨询/劳务费": "管理费用",
+    "租赁费": "管理费用",
+    "财务费用": "财务费用",
+    "其他支出/待分类": "管理费用"
+}
 
-# 智能识别规则
 TAX_RULES = {
     "业务招待费": ["请客", "吃饭", "聚餐", "招待", "宴请", "烟酒", "礼品", "酒店住宿"],
     "差旅费": ["出差", "机票", "高铁", "火车", "住宿", "打车", "滴滴", "行程"],
@@ -30,18 +40,15 @@ TAX_RULES = {
 }
 
 def auto_map_tax(row_type, note_text):
-    """自动识别税务科目"""
-    if row_type == '收入':
-        return "主营业务收入"
+    if row_type == '收入': return "主营业务收入"
     full_text = str(note_text).lower()
     for tax_category, keywords in TAX_RULES.items():
         for keyword in keywords:
-            if keyword.lower() in full_text:
-                return tax_category
+            if keyword.lower() in full_text: return tax_category
     return "其他支出/待分类"
 
-# --- 2. 数据持久化 ---
-DATA_FILE = "unified_ledger_v3.csv"
+# --- 2. 数据处理 ---
+DATA_FILE = "unified_ledger_tax_v4.csv"
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -56,120 +63,110 @@ def save_data(df):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 3. 侧边栏：录入数据 ---
+# --- 3. 侧边栏 ---
 with st.sidebar:
-    st.title("💰 记账面板")
-    app_mode = st.radio("当前模式", ["个人生活模式", "企业报税模式"])
+    st.title("🏦 财务管理系统")
+    app_mode = st.radio("模式切换", ["个人记账", "企业报税(专业)"])
     
     st.markdown("---")
-    with st.form("add_form", clear_on_submit=True):
-        date = st.date_input("日期", datetime.now().date())
-        trans_type = st.selectbox("类型", ["支出", "收入"])
-        
-        amount = st.number_input("金额", min_value=0.0, step=1.0)
-        note = st.text_input("备注 (系统将根据此项自动匹配)")
-        
-        # 预设分类逻辑
-        if app_mode == "个人生活模式":
-            personal_cats = ["餐饮", "交通", "购物", "娱乐", "居住", "医疗", "其他"] if trans_type == "支出" else ["工资", "理财", "兼职", "其他"]
-            selected_cat = st.selectbox("选择生活分类", personal_cats)
-        else:
-            # 企业模式下，尝试先自动识别，用户也可以手动微调
-            suggested_cat = auto_map_tax(trans_type, note)
-            st.caption(f"💡 自动识别结果预览：{suggested_cat}")
-            selected_cat = suggested_cat # 初始保存自动识别的结果
-            
-        if st.form_submit_button("保存账单"):
-            final_cat = selected_cat if app_mode == "个人生活模式" else auto_map_tax(trans_type, note)
-            new_row = pd.DataFrame([{
-                '日期': date,
-                '类型': trans_type,
-                '分类': final_cat,
-                '金额': amount,
-                '备注': note
-            }])
-            st.session_state.data = pd.concat([st.session_state.data, new_row], ignore_index=True)
+    with st.form("add_record"):
+        st.subheader("📝 快速记账")
+        d = st.date_input("日期", datetime.now().date())
+        t = st.selectbox("类型", ["支出", "收入"])
+        a = st.number_input("金额", min_value=0.0)
+        n = st.text_input("描述 (如：上海出差酒店费)")
+        if st.form_submit_button("保存"):
+            cat = auto_map_tax(t, n) if app_mode == "企业报税(专业)" else "生活支出"
+            new_data = pd.DataFrame([{'日期': d, '类型': t, '分类': cat, '金额': a, '备注': n}])
+            st.session_state.data = pd.concat([st.session_state.data, new_data], ignore_index=True)
             save_data(st.session_state.data)
-            st.toast(f"已存入：{final_cat}")
+            st.toast("入账成功")
 
 # --- 4. 主界面 ---
-st.title(f"📊 {app_mode}工作台")
+st.title(f"🚀 {app_mode}工作台")
 
 if not st.session_state.data.empty:
-    # A. 核心数据汇总
-    df = st.session_state.data
-    income = df[df['类型'] == '收入']['金额'].sum()
-    expense = df[df['类型'] == '支出']['金额'].sum()
-    
-    m1, m2, m3 = st.columns(3)
-    m1.metric("总收入", f"¥{income:,.2f}")
-    m2.metric("总支出", f"¥{expense:,.2f}")
-    m3.metric("本期盈余", f"¥{income - expense:,.2f}")
+    tab_view, tab_tax_report = st.tabs(["📊 流动明细与管理", "📄 智能报税利润表"])
 
-    # B. 核心功能区
-    tab_manage, tab_analysis = st.tabs(["🗂️ 账单明细管理", "📈 数据分析图表"])
-
-    with tab_manage:
-        st.subheader("明细查看与修正")
-        st.info("💡 技巧：如果 AI 识别分类错误，请直接点击下方的“分类”单元格，从下拉列表中选择正确的税务科目。修改后请记得点击“保存更改”。")
-        
-        # 配置编辑器的列属性
-        all_possible_cats = list(set(TAX_CATEGORIES + ["餐饮", "交通", "购物", "娱乐", "居住", "医疗", "其他", "工资", "理财", "兼职", "主营业务收入"]))
-        
-        edited_df = st.data_editor(
-            df,
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config={
-                "日期": st.column_config.DateColumn("日期"),
-                "类型": st.column_config.SelectboxColumn("类型", options=["支出", "收入"]),
-                "分类": st.column_config.SelectboxColumn("分类 (可手动纠正)", options=all_possible_cats),
-                "金额": st.column_config.NumberColumn("金额", format="¥%.2f"),
-                "备注": st.column_config.TextColumn("备注/说明", width="large")
-            }
-        )
-        
-        if st.button("💾 保存所有修改（同步至图表）", type="primary"):
+    with tab_view:
+        st.subheader("明细修正")
+        edited_df = st.data_editor(st.session_state.data, use_container_width=True, num_rows="dynamic")
+        if st.button("💾 同步并保存更改"):
             st.session_state.data = edited_df
             save_data(edited_df)
-            st.success("数据已成功更新，分析图表已同步！")
+            st.success("数据已更新")
             st.rerun()
 
-    with tab_analysis:
-        analysis_df = st.session_state.data
+    with tab_tax_report:
+        st.subheader("📅 小微企业利润表 (损益表参考)")
         
-        # 1. 收支趋势
-        st.write("**收支变动趋势**")
-        trend_fig = px.line(analysis_df.sort_values("日期"), x="日期", y="金额", color="类型", markers=True)
-        st.plotly_chart(trend_fig, use_container_width=True)
+        # 筛选器
+        df_report = st.session_state.data.copy()
+        df_report['日期'] = pd.to_datetime(df_report['日期'])
+        years = df_report['日期'].dt.year.unique()
         
-        col_left, col_right = st.columns(2)
+        col_y, col_m = st.columns(2)
+        sel_year = col_y.selectbox("选择年份", years)
+        sel_month = col_m.multiselect("选择月份 (不选则查看全年)", range(1, 13))
         
-        with col_left:
-            # 2. 支出分类分布 (这是你关注的核心)
-            st.write(f"**{app_mode} - 支出构成**")
-            exp_df = analysis_df[analysis_df['类型'] == '支出']
-            if not exp_df.empty:
-                # 直接使用“分类”列，这样你在管理页面修改的结果会立刻体现
-                fig_pie = px.pie(exp_df, values='金额', names='分类', hole=0.4)
-                st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                st.warning("暂无支出数据")
-
-        with col_right:
-            # 3. 收入来源分析
-            st.write("**收入来源分析**")
-            inc_df = analysis_df[analysis_df['类型'] == '收入']
-            if not inc_df.empty:
-                fig_inc = px.bar(inc_df.groupby("分类")["金额"].sum().reset_index(), x="分类", y="金额", color="分类")
-                st.plotly_chart(fig_inc, use_container_width=True)
-            else:
-                st.warning("暂无收入数据")
-
-    # C. 导出
-    st.markdown("---")
-    csv = st.session_state.data.to_csv(index=False).encode('utf-8-sig')
-    st.download_button(f"📥 导出为 {app_mode} 报表", csv, f"ledger_{app_mode}.csv", "text/csv")
+        # 过滤数据
+        filtered_df = df_report[df_report['日期'].dt.year == sel_year]
+        if sel_month:
+            filtered_df = filtered_df[filtered_df['日期'].dt.month.isin(sel_month)]
+        
+        if not filtered_df.empty:
+            # 1. 自动归集会计科目
+            filtered_df['会计报表项'] = filtered_df['分类'].map(FINANCIAL_REPORT_MAPPING).fillna("其他费用")
+            
+            # 2. 计算各项汇总
+            summary = filtered_df.groupby('会计报表项')['金额'].sum().to_dict()
+            
+            # 3. 构造利润表结构
+            rev = summary.get("一、营业收入", 0)
+            cost = summary.get("二、营业成本", 0)
+            sell_exp = summary.get("销售费用", 0)
+            admin_exp = summary.get("管理费用", 0)
+            fin_exp = summary.get("财务费用", 0)
+            
+            op_profit = rev - cost - sell_exp - admin_exp - fin_exp
+            
+            report_data = [
+                {"项目": "一、营业收入", "本期金额": rev},
+                {"项目": "  减：营业成本", "本期金额": cost},
+                {"项目": "      销售费用", "本期金额": sell_exp},
+                {"项目": "      管理费用", "本期金额": admin_exp},
+                {"项目": "      财务费用", "本期金额": fin_exp},
+                {"项目": "二、营业利润", "本期金额": op_profit},
+                {"项目": "三、利润总额", "本期金额": op_profit},
+                {"项目": "  减：所得税费用 (参考 20% / 25%)", "本期金额": max(0, op_profit * 0.2)},
+                {"项目": "四、净利润", "本期金额": op_profit - max(0, op_profit * 0.2)}
+            ]
+            
+            final_report_df = pd.DataFrame(report_data)
+            
+            # 美化展示
+            st.table(final_report_df.style.format({"本期金额": "¥{:,.2f}"}))
+            
+            st.markdown("---")
+            st.subheader("📦 报税一键导出")
+            
+            # 导出明细和汇总
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                final_report_df.to_excel(writer, sheet_name='利润表汇总', index=False)
+                filtered_df.to_excel(writer, sheet_name='原始流水明细', index=False)
+            
+            st.download_button(
+                label="📥 点击下载 Excel 报税参考包",
+                data=output.getvalue(),
+                file_name=f"小微企业报税表_{sel_year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("该时间段内暂无记录")
 
 else:
-    st.info("记录为空，请开始记账吧！")
+    st.info("请先在左侧输入账单数据")
+
+# 引入导出所需的库
+import io
